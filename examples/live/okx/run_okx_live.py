@@ -45,19 +45,20 @@ def main():
 
     config = TradingNodeConfig(
 
+        
         # 日志
         logging=LoggingConfig(log_level="INFO"),
 
            # ===== Cache（存储订单、持仓等快照） =====                                         
         cache=CacheConfig(                                                                  
-            database=DatabaseConfig(                                                        
-                type="redis",        # Redis 连接                                           
-                host="127.0.0.1",                                                           
-                port=6379,                                                                  
-                password=None,                                                              
-            ),                                                                              
+            # database=DatabaseConfig(                                                        
+            #     type="redis",        # Redis 连接                                           
+            #     host="127.0.0.1",                                                           
+            #     port=6379,                                                                  
+            #     password=None,                                                              
+            # ),                                                                              
             # 可选：持久化到 PostgreSQL                                                     
-            # database_backups=DatabaseConfig(                                                
+            # database=DatabaseConfig(                                                
             #     type="postgres",     # PostgreSQL 连接                                      
             #     host="127.0.0.1",                                                           
             #     port=5432,                                                                  
@@ -67,13 +68,25 @@ def main():
         ),                                                                                  
                                                                                           
         # ===== MessageBus（消息总线持久化） =====                                          
-        # message_bus=MessageBusConfig(                                                       
-        #     database=DatabaseConfig(                                                        
-        #         type="redis",                                                               
-        #         host="127.0.0.1",                                                           
-        #         port=6379,                                                                  
-        #     ),                                                                              
-        # ),
+        message_bus=MessageBusConfig(                                                       
+            # database=DatabaseConfig(                                                        
+            #     type="redis",                                                               
+            #     host="127.0.0.1",                                                           
+            #     port=6379,                                                                  
+            # ),      
+            # database=DatabaseConfig(                                                
+            #     type="postgres",     # PostgreSQL 连接                                      
+            #     host="127.0.0.1",                                                           
+            #     port=5432,                                                                  
+            #     username="nautilus",                                                        
+            #     password="pass",                                                            
+            # ),                                                                        
+        ),
+
+        # catalogs={
+        #     DataCatalogConfig:
+        # },
+
 
         # ===== 行情 =====
         data_clients={
@@ -98,6 +111,7 @@ def main():
 
     # ===== 创建 node =====
     node = TradingNode(config=config)
+    
 
     # 添加策略
     # node.trader.add_strategy(OKXStrategy())
