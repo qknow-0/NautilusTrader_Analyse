@@ -9,7 +9,9 @@ import { OrderSide, OrderType, BarAggregation, AggressorSide } from '../src/core
 const INSTRUMENT = InstrumentId.from('BTC-USDT.BINANCE');
 const STRATEGY = StrategyId.from('TEST');
 
+// 撮合引擎测试
 describe('MatchingEngine', () => {
+  // 测试市价单以开盘价成交
   it('should fill market order at open price', () => {
     const engine = new MatchingEngine();
     const fills: any[] = [];
@@ -28,11 +30,12 @@ describe('MatchingEngine', () => {
     });
 
     expect(fills.length).toBe(1);
-    expect(fills[0].price.toString()).toBe('50000'); // Open price
+    expect(fills[0].price.toString()).toBe('50000'); // 开盘价成交
     expect(fills[0].qty.toString()).toBe('1');
     expect(order.status).toBe('FILLED');
   });
 
+  // 测试限价单在价格触及限价时成交
   it('should fill limit order when price is reached', () => {
     const engine = new MatchingEngine();
     const fills: any[] = [];
@@ -40,7 +43,7 @@ describe('MatchingEngine', () => {
     const order = createOrder(STRATEGY, INSTRUMENT, OrderSide.Buy, OrderType.Limit, '1', '50000');
     engine.addOrder(order);
 
-    // Bar where low goes below limit price
+    // K 线最低价低于限价
     const bar = createBar(
       INSTRUMENT, 1, BarAggregation.Minute,
       '50100', '50200', '49900', '50050', '100',
@@ -55,6 +58,7 @@ describe('MatchingEngine', () => {
     expect(order.status).toBe('FILLED');
   });
 
+  // 测试限价单在价格未触及限价时不成交
   it('should NOT fill limit order when price is not reached', () => {
     const engine = new MatchingEngine();
     const fills: any[] = [];
@@ -62,7 +66,7 @@ describe('MatchingEngine', () => {
     const order = createOrder(STRATEGY, INSTRUMENT, OrderSide.Buy, OrderType.Limit, '1', '49800');
     engine.addOrder(order);
 
-    // Bar where low stays above limit price
+    // K 线最低价高于限价
     const bar = createBar(
       INSTRUMENT, 1, BarAggregation.Minute,
       '50000', '50100', '49900', '50050', '100',
@@ -74,10 +78,11 @@ describe('MatchingEngine', () => {
     });
 
     expect(fills.length).toBe(0);
-    // Order is not filled; status stays as INITIALIZED (matching engine doesn't change it to ACCEPTED)
+    // 订单未成交，状态保持 INITIALIZED
     expect(order.status).not.toBe('FILLED');
   });
 
+  // 测试逐笔成交数据驱动的撮合
   it('should fill on trade tick', () => {
     const engine = new MatchingEngine();
     const fills: any[] = [];
@@ -96,7 +101,7 @@ describe('MatchingEngine', () => {
     });
 
     expect(fills.length).toBe(1);
-    expect(fills[0].price.toString()).toBe('50000'); // Limit price
-    expect(fills[0].qty.toString()).toBe('0.5'); // Limited by tick size
+    expect(fills[0].price.toString()).toBe('50000'); // 限价成交
+    expect(fills[0].qty.toString()).toBe('0.5');     // 受限于成交量
   });
 });

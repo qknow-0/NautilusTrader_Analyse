@@ -7,9 +7,9 @@ import Decimal from 'decimal.js';
 import { Strategy } from '../src/strategy/base.js';
 import { Bar } from '../src/model/data.js';
 
-// Simple test strategy that buys on first bar
+// 简单测试策略：第一条 K 线买入并持有
 class BuyAndHoldStrategy extends Strategy {
-  private bought = false;
+  private bought = false;  // 是否已买入
 
   constructor(id: string) {
     super(id);
@@ -23,22 +23,25 @@ class BuyAndHoldStrategy extends Strategy {
   }
 }
 
+// 回测引擎集成测试
 describe('BacktestEngine', () => {
+  // 测试完整回测流程
   it('should run a simple backtest', () => {
     const instrumentId = InstrumentId.from('BTC-USDT.BINANCE');
 
     const engine = new BacktestEngine({ traderId: 'TEST-001' });
 
+    // 添加交易所（模拟）
     engine.addVenue({
       name: 'BINANCE',
       startingBalances: new Map([
-        ['USDT', new Decimal(100000)],
+        ['USDT', new Decimal(100000)],  // 初始余额 100,000 USDT
       ]),
     });
 
     engine.addInstrument(instrumentId);
 
-    // Create 10 bars of test data
+    // 生成 10 条测试 K 线数据
     const bars = [];
     for (let i = 0; i < 10; i++) {
       const ts = UnixNanos.fromMillis(1000000 + i * 60000);

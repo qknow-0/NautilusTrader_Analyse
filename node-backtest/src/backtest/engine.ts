@@ -13,37 +13,42 @@ import { Strategy } from '../strategy/base.js';
 import { computeStats, PortfolioStats } from '../analysis/stats.js';
 import { OrderSide } from '../core/enums.js';
 
+// 回测引擎配置接口
 export interface BacktestEngineConfig {
-  traderId?: string;
+  traderId?: string; // 交易员 ID
 }
 
+// 回测引擎：驱动整个回测主循环，协调交易所、策略和数据源
 export class BacktestEngine {
-  public readonly traderId: TraderId;
-  public readonly msgbus: MessageBus;
+  public readonly traderId: TraderId;     // 交易员 ID
+  public readonly msgbus: MessageBus;     // 消息总线，用于组件间通信
 
-  private venues: Map<string, SimulatedExchange> = new Map();
-  private instruments: Map<string, InstrumentId> = new Map();
-  private strategies: Strategy[] = [];
-  private dataFeed: DataFeed | null = null;
-  private resultAggregator = new ResultAggregator();
-  private positions: Map<string, Position> = new Map();
-  private equityCurve: number[] = [];
-  private currentTime: UnixNanos | null = null;
+  private venues: Map<string, SimulatedExchange> = new Map(); // 模拟交易所集合
+  private instruments: Map<string, InstrumentId> = new Map(); // 注册的合约/标的
+  private strategies: Strategy[] = [];                        // 策略列表
+  private dataFeed: DataFeed | null = null;                   // 数据源迭代器
+  private resultAggregator = new ResultAggregator();          // 结果聚合器
+  private positions: Map<string, Position> = new Map();       // 当前持仓（按标的 ID 索引）
+  private equityCurve: number[] = [];                         // 权益曲线（每个数据点的总权益）
+  private currentTime: UnixNanos | null = null;               // 当前回测时间
 
   constructor(config?: BacktestEngineConfig) {
     this.traderId = TraderId.from(config?.traderId ?? 'BACKTEST-001');
     this.msgbus = new MessageBus();
   }
 
+  // 添加一个模拟交易所
   addVenue(config: VenueConfig): void {
     const exchange = new SimulatedExchange(this.msgbus, config);
     this.venues.set(config.name, exchange);
   }
 
+  // 注册一个合约/标的 ID
   addInstrument(instrumentId: InstrumentId): void {
     this.instruments.set(instrumentId.toString(), instrumentId);
   }
 
+  // 添加市场数据（只能调用一次）
   addData(data: MarketData[]): void {
     if (this.dataFeed) {
       throw new Error('Data already added. Use a single addData call.');
@@ -51,13 +56,14 @@ export class BacktestEngine {
     this.dataFeed = new DataFeed(data);
   }
 
+  // 添加一个交易策略
   addStrategy(strategy: Strategy): void {
     strategy.engine = this;
     strategy.msgbus = this.msgbus;
     this.strategies.push(strategy);
   }
 
-  // Called by strategies to submit orders
+  // 由策略调用：提交订单到交易所
   submitOrder(order: Order): void {
     const exchange = this.venues.values().next().value;
     if (!exchange) {
@@ -67,18 +73,19 @@ export class BacktestEngine {
     this.resultAggregator.recordOrder(order);
   }
 
-  // Called by strategies to cancel orders
+  // 由策略调用：取消订单
   cancelOrder(clientOrderId: string): void {
     const exchange = this.venues.values().next().value;
     if (!exchange) return;
     exchange.cancelOrder(clientOrderId);
   }
 
-  // Get current portfolio state
+  // 获取所有当前持仓
   getPositions(): Position[] {
     return Array.from(this.positions.values());
   }
 
+  // 获取指定标的的持仓，若不存在则创建新持仓
   getPosition(instrumentId: InstrumentId): Position {
     const key = instrumentId.toString();
     let pos = this.positions.get(key);
@@ -89,19 +96,22 @@ export class BacktestEngine {
     return pos;
   }
 
+  // 获取指定币种的账户可用余额
   getAccountBalance(currency: string): Decimal {
     const exchange = this.venues.values().next().value;
     if (!exchange) return new Decimal(0);
     return exchange.account.getFree(currency);
   }
 
+  // 记录各标的最新价格（从 K 线或成交数据中提取）
+  private lastPrices: Map<string, { price: Decimal }> = new Map();
+
+  // 获取标的的当前最新价格
   private getCurrentPrice(instrumentId: InstrumentId): { price: Decimal } | null {
-    // Track last known prices from bar processing
     return this.lastPrices.get(instrumentId.toString()) || null;
   }
 
-  private lastPrices: Map<string, { price: Decimal }> = new Map();
-
+  // === 回测主循环 ===
   run(startTime?: UnixNanos, endTime?: UnixNanos): BacktestResult {
     if (!this.dataFeed) {
       throw new Error('No data added. Call addData() before run().');
@@ -110,28 +120,30 @@ export class BacktestEngine {
       throw new Error('No strategies added. Call addStrategy() before run().');
     }
 
+    // 记录回测运行开始时间
     this.resultAggregator.start();
 
-    // Initialize strategies
+    // 初始化所有策略（调用 onStart）
     for (const strategy of this.strategies) {
       strategy.onStart();
     }
 
-    // Register fill event handler
+    // 注册订单成交事件监听器：收到成交事件后更新持仓
     this.msgbus.subscribe('events.order.*', (data: unknown) => {
       const event = data as { type: string; order?: Order; fillPrice?: any; fillQty?: any };
       if (event.type === 'filled' && event.order) {
+        // 通知所有策略订单已成交
         for (const strategy of this.strategies) {
           strategy.onOrderFilled(event.order);
         }
         this.resultAggregator.recordOrder(event.order);
 
-        // Update position
+        // 根据成交结果更新持仓
         this.updatePositionFromFill(event.order, event.fillPrice!, event.fillQty!);
       }
     });
 
-    // Main loop
+    // 设置回测时间范围
     const startTs = startTime;
     const endTs = endTime;
 
@@ -139,30 +151,34 @@ export class BacktestEngine {
       this.resultAggregator.setBacktestRange(startTs, endTs);
     }
 
+    // 主循环：逐条处理市场数据
     let data = this.dataFeed.next();
     while (data) {
-      // Time range filtering
+      // 时间范围过滤：跳过起始时间之前的数据
       if (startTs && data.tsInit.lt(startTs)) {
         data = this.dataFeed.next();
         continue;
       }
+      // 超出结束时间则终止回测
       if (endTs && data.tsInit.gt(endTs)) {
         break;
       }
 
+      // 更新当前回测时间
       this.currentTime = data.tsInit;
 
-      // Process data through exchange
+      // 步骤 1：将数据送入交易所处理（撮合订单等）
       for (const [, exchange] of this.venues) {
         if (isBar(data)) {
           exchange.processBar(data);
-          // Track last price
+          // 记录最新收盘价
           this.lastPrices.set(
             data.instrumentId.toString(),
             { price: data.close.value },
           );
         } else if (isTradeTick(data)) {
           exchange.processTradeTick(data);
+          // 记录最新成交价
           this.lastPrices.set(
             data.instrumentId.toString(),
             { price: data.price.value },
@@ -170,7 +186,7 @@ export class BacktestEngine {
         }
       }
 
-      // Dispatch data to strategies
+      // 步骤 2：将数据分发给策略处理（onBar / onTrade）
       for (const strategy of this.strategies) {
         if (isBar(data)) {
           strategy.onBar(data);
@@ -179,25 +195,28 @@ export class BacktestEngine {
         }
       }
 
-      // Update positions unrealized PnL
+      // 步骤 3：更新所有未平仓持仓的浮盈浮亏
       this.updateUnrealizedPnls();
 
-      // Record equity
+      // 步骤 4：记录当前权益值（用于绘制权益曲线）
       this.recordEquity();
 
+      // 记录已处理数据点
       this.resultAggregator.recordDataPoint();
       data = this.dataFeed.next();
     }
 
-    // Finalize
+    // 回测结束：通知所有策略停止
     for (const strategy of this.strategies) {
       strategy.onStop();
     }
 
     this.resultAggregator.stop();
 
-    // Compute final stats
+    // 计算最终绩效统计
     const stats = this.computeFinalStats();
+
+    // 收集各币种最终余额
     const finalBalances = new Map<string, string>();
     const exchange = this.venues.values().next().value;
     if (exchange) {
@@ -206,11 +225,13 @@ export class BacktestEngine {
       }
     }
 
+    // 将各币种已实现盈亏转为数字格式
     const realizedPnl = new Map<string, number>();
     for (const [currency, val] of stats.realizedPnl) {
       realizedPnl.set(currency, Number(val));
     }
 
+    // 构建并返回最终回测结果
     return this.resultAggregator.build(
       finalBalances,
       realizedPnl,
@@ -221,6 +242,7 @@ export class BacktestEngine {
     );
   }
 
+  // 根据订单成交结果更新持仓（开仓/加仓/平仓）
   private updatePositionFromFill(
     order: Order,
     fillPrice: Price,
@@ -229,12 +251,14 @@ export class BacktestEngine {
     const position = this.getPosition(order.instrumentId);
 
     if (order.side === OrderSide.Buy) {
+      // 买入：未持仓则开仓，已有持仓则加仓
       if (!isPositionOpen(position)) {
         openPosition(position, fillQty, fillPrice, order.tsLast!);
       } else {
         addToPosition(position, fillQty, fillPrice, order.tsLast!);
       }
     } else {
+      // 卖出：已有持仓则减仓/平仓
       if (isPositionOpen(position)) {
         closePosition(position, fillQty, fillPrice, order.tsLast!);
         this.resultAggregator.recordPosition(position);
@@ -242,6 +266,7 @@ export class BacktestEngine {
     }
   }
 
+  // 更新所有未平仓持仓的浮盈浮亏
   private updateUnrealizedPnls(): void {
     for (const [, position] of this.positions) {
       const lastPrice = this.getCurrentPrice(position.instrumentId);
@@ -251,16 +276,17 @@ export class BacktestEngine {
     }
   }
 
+  // 记录当前总权益（余额 + 浮盈浮亏）
   private recordEquity(): void {
     const exchange = this.venues.values().next().value;
     if (!exchange) return;
 
     let equity = 0;
+    // 累加各币种账户余额
     for (const [currency, bal] of exchange.account.balances) {
-      // Simple: use total balance as equity (ignoring unrealized for simplicity)
       equity += Number(bal.total);
     }
-    // Add unrealized PnL
+    // 加上未平仓持仓的浮盈浮亏
     for (const [, position] of this.positions) {
       if (isPositionOpen(position) && position.unrealizedPnl) {
         equity += Number(position.unrealizedPnl.value);
@@ -269,6 +295,7 @@ export class BacktestEngine {
     this.equityCurve.push(equity);
   }
 
+  // 计算最终绩效统计指标（夏普比率、最大回撤、胜率等）
   private computeFinalStats(): PortfolioStats {
     return computeStats(this.equityCurve, this.resultAggregator);
   }

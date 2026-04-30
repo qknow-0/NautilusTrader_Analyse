@@ -1,25 +1,28 @@
 import Decimal from 'decimal.js';
-import { Price, Quantity } from '../core/types.js';
 import { OrderSide, OrderType } from '../core/enums.js';
 
-// Account balance for a single currency
+// 单币种账户余额
 export class AccountBalance {
-  public total: Decimal;
-  public locked: Decimal;
+  public total: Decimal;  // 总余额
+  public locked: Decimal; // 冻结金额
 
+  // 初始化币种和初始余额
   constructor(public readonly currency: string, initial: Decimal = new Decimal(0)) {
     this.total = initial;
     this.locked = new Decimal(0);
   }
 
+  // 可用余额 = 总余额 - 冻结金额
   get free(): Decimal {
     return this.total.sub(this.locked);
   }
 
+  // 存入资金
   deposit(amount: Decimal): void {
     this.total = this.total.add(amount);
   }
 
+  // 提取资金，需检查可用余额充足
   withdraw(amount: Decimal): void {
     if (this.free.lt(amount)) {
       throw new Error(`Insufficient ${this.currency} balance: free=${this.free}, need=${amount}`);
@@ -27,6 +30,7 @@ export class AccountBalance {
     this.total = this.total.sub(amount);
   }
 
+  // 冻结指定金额，需检查可用余额充足
   lock(amount: Decimal): void {
     if (this.free.lt(amount)) {
       throw new Error(`Insufficient free ${this.currency}: free=${this.free}, need=${amount}`);
@@ -34,6 +38,7 @@ export class AccountBalance {
     this.locked = this.locked.add(amount);
   }
 
+  // 解冻指定金额，冻结金额不低于零
   unlock(amount: Decimal): void {
     this.locked = this.locked.sub(amount);
     if (this.locked.lt(0)) {
@@ -41,15 +46,17 @@ export class AccountBalance {
     }
   }
 
+  // 格式化输出余额信息
   toString(): string {
     return `${this.total} ${this.currency} (free: ${this.free}, locked: ${this.locked})`;
   }
 }
 
-// Cash account for spot trading
+// 现货现金账户，支持多币种
 export class CashAccount {
   public balances: Map<string, AccountBalance>;
 
+  // 用初始余额初始化各币种账户
   constructor(initialBalances: Map<string, Decimal>) {
     this.balances = new Map();
     for (const [currency, amount] of initialBalances) {
@@ -57,6 +64,7 @@ export class CashAccount {
     }
   }
 
+  // 获取币种余额，不存在则自动创建
   getBalance(currency: string): AccountBalance {
     let balance = this.balances.get(currency);
     if (!balance) {
@@ -66,31 +74,32 @@ export class CashAccount {
     return balance;
   }
 
+  // 获取币种可用余额
   getFree(currency: string): Decimal {
     return this.getBalance(currency).free;
   }
 
-  // Lock funds for a buy order
+  // 为买单冻结计价币资金
   lockForBuy(quoteCurrency: string, cost: Decimal): void {
     this.getBalance(quoteCurrency).lock(cost);
   }
 
-  // Unlock funds when order is cancelled or partially filled
+  // 订单取消时解冻剩余资金
   unlockForCancel(quoteCurrency: string, amount: Decimal): void {
     this.getBalance(quoteCurrency).unlock(amount);
   }
 
-  // Execute a fill
+  // 执行成交，更新买卖双方的币种余额
   fillOrder(
-    side: OrderSide,
-    type: OrderType,
-    quoteCurrency: string,
-    baseCurrency: string,
-    cost: Decimal,
-    quantity: Decimal,
+    side: OrderSide,       // 买卖方向
+    type: OrderType,       // 订单类型
+    quoteCurrency: string, // 计价币
+    baseCurrency: string,  // 基础币
+    cost: Decimal,         // 成交金额
+    quantity: Decimal,     // 成交数量
   ): void {
     if (side === OrderSide.Buy) {
-      // Pay quote currency, receive base currency
+      // 买单：支付计价币，获得基础币
       const quoteBal = this.getBalance(quoteCurrency);
       quoteBal.locked = quoteBal.locked.sub(cost);
       quoteBal.total = quoteBal.total.sub(cost);
@@ -98,7 +107,7 @@ export class CashAccount {
       const baseBal = this.getBalance(baseCurrency);
       baseBal.total = baseBal.total.add(quantity);
     } else {
-      // Pay base currency, receive quote currency
+      // 卖单：支付基础币，获得计价币
       const baseBal = this.getBalance(baseCurrency);
       baseBal.total = baseBal.total.sub(quantity);
 
@@ -109,6 +118,7 @@ export class CashAccount {
     }
   }
 
+  // 格式化输出所有币种余额
   toString(): string {
     const parts: string[] = [];
     for (const [, bal] of this.balances) {
